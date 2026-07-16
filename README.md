@@ -9,13 +9,22 @@ If it ticks the boxes, it ticks the boxes.
 
 ## What it does
 
-1. **Tracks wallets you label** — `/addwallet`, `/wallets`, `/label`, `/untrack`
+1. **Tracks wallets you label** — `/addwallet`, `/wallets`, `/label`, `/untrack`. EVM wallets
+   auto-track across Ethereum, Base, and Robinhood Chain from a single add.
 2. **Ingests trades in real time** via Helius (Solana) and Alchemy (EVM: Ethereum, Base,
    Robinhood Chain) webhooks — push-based, not polling
-3. **Scores confluence** — wallet count, historical win rate, liquidity health — size-agnostic
-4. **Gates every alert through GoPlus Security** — honeypot, mint/freeze authority, sell tax,
+3. **Prices every trade at ingest** via a live DexScreener lookup, converting raw on-chain
+   quantity into an actual USD value — the foundation for real PnL, not quantity math
+   dressed up as dollars
+4. **Notifies on every tracked-wallet trade** — buy or sell — with contract address and
+   chart/explorer links, separate from the confluence alert
+5. **Scores confluence** — wallet count, historical win rate, liquidity health — size-agnostic
+6. **Gates every alert through GoPlus Security** — honeypot, mint/freeze authority, sell tax,
    holder concentration. Fails the check → no alert, full stop.
-5. **Pushes a clean, branded alert to Telegram** the moment a token clears both bars
+7. **Pushes a clean, branded alert to Telegram** the moment a token clears both bars
+8. **`/wallethistory`** — trade history, FIFO-matched realized PnL, and win rate for any
+   tracked wallet, on demand — includes quantity bought/sold and market cap at entry
+   and exit for each closed position, not just a dollar total
 
 ## Why Robinhood Chain is in here
 
@@ -80,12 +89,14 @@ still saved locally, it just won't receive live trades until you re-run
 main.py                 FastAPI + Telegram bot, single-process entrypoint
 config.py                all env vars and chain config in one place
 database.py              Wallet / Trade / Alert / Subscriber models
-bot/handlers.py          /addwallet /wallets /label /untrack /stats
-ingest/helius_webhook.py Solana trade ingestion
-ingest/evm_webhook.py    Ethereum / Base / Robinhood Chain trade ingestion
+bot/handlers.py          /addwallet /wallets /label /untrack /stats /wallethistory
+ingest/helius_webhook.py Solana trade ingestion + live pricing
+ingest/evm_webhook.py    Ethereum / Base / Robinhood Chain trade ingestion + live pricing
 scoring/confluence.py    size-agnostic opportunity scoring
 scoring/security.py      GoPlus honeypot/rug gate
-alerts/notifier.py       formats + sends the Telegram alert
+scoring/wallet_stats.py  FIFO-matched trade history, realized PnL, win rate
+utils/price.py           live USD price lookup (DexScreener) used at ingest time
+alerts/notifier.py       per-trade notifications + confluence alerts
 ```
 
 ## Tuning the filter
