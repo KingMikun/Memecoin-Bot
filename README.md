@@ -57,13 +57,23 @@ Talk to your bot on Telegram, run `/addwallet <address> <chain> <label>`.
 4. Set `PUBLIC_BASE_URL` to the Railway-assigned domain
 5. Deploy — Railway reads the `Procfile` automatically
 
-### Wiring up webhooks live
-When you `/addwallet`, the bot stores it locally but does **not** yet auto-register it
-with Helius/Alchemy — that's the one manual step left as a TODO in
-`bot/handlers.py::add_wallet()`. Two ways to close it:
-- Quick: add the address manually in the Helius/Alchemy dashboard after each `/addwallet`
-- Full auto: call `helius.webhooks.updateWebhook()` / Alchemy's Notify API inside
-  `add_wallet()` — both are straightforward REST PATCH calls, ~15 lines each
+### Wiring up webhooks — now automatic
+`/addwallet`, `/importwallets`, and `/untrack` sync straight to Helius/Alchemy —
+no manual dashboard step per wallet. What you set up **once**, not per wallet:
+
+1. Create one webhook in the Helius dashboard (type: `Enhanced`, tx type: `SWAP`,
+   at least one placeholder address), copy its ID into `HELIUS_WEBHOOK_ID`
+2. Create one Address Activity webhook per EVM chain in Alchemy's dashboard,
+   pointed at `{PUBLIC_BASE_URL}/webhook/evm`, copy each ID into
+   `ALCHEMY_WEBHOOK_ID_ETHEREUM` / `_BASE` / `_ROBINHOOD`
+3. Grab your Alchemy Notify auth token (Dashboard → Settings → Auth Token,
+   *different* from your API key) into `ALCHEMY_AUTH_TOKEN`
+
+After that, every `/addwallet` PATCHes the right webhook automatically, and
+`/untrack` pulls it back off. If a sync call fails (bad token, rate limit),
+the bot tells you in the reply rather than failing silently — the wallet is
+still saved locally, it just won't receive live trades until you re-run
+`/addwallet` once the credentials are fixed.
 
 ## Project structure
 ```
@@ -82,6 +92,29 @@ alerts/notifier.py       formats + sends the Telegram alert
 Everything's in `.env` — confluence wallet minimum, time window, max holder
 concentration, min liquidity. No mcap/FDV cutoff by design; if you want one later,
 add it in `scoring/confluence.py::score_token()`.
+
+## Seeding wallets from real leaderboards
+
+**Solana — automated:**
+```bash
+python -m ingest.discovery --min-trades 10 --top 15
+```
+Pulls KOLscan's live leaderboard, filters out low-trade-count noise, adds the rest
+straight to your DB labeled `KOLscan: <name>`. Re-run daily (or wire into a
+Railway cron / APScheduler job) to keep the bench current.
+
+**Bulk manual add (any chain):**
+```
+/importwallets
+<address>, <chain>, <label>
+<address>, <chain>, <label>
+```
+
+**Ethereum / Base — no free global leaderboard exists.** Nansen's Smart Money
+API (docs.nansen.ai) is the real tool here but it's paid. The free workaround
+is per-token: pull the "Top Traders" list on Birdeye/DexScreener for tokens
+you already have conviction on — see `seed_evm_from_birdeye_top_traders()` in
+`ingest/discovery.py` for a stub to wire up once you have a Birdeye key.
 
 ## Not financial advice
 The bot flags patterns, not guarantees. GoPlus and every honeypot detector will
