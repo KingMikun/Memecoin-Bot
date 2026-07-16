@@ -17,8 +17,18 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./king_wallet_bot.db")
 # --- Provider keys ---
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
 HELIUS_WEBHOOK_SECRET = os.getenv("HELIUS_WEBHOOK_SECRET", "")
+HELIUS_WEBHOOK_ID = os.getenv("HELIUS_WEBHOOK_ID", "")  # from creating the webhook once, see README
+
 ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY", "")
 ALCHEMY_WEBHOOK_SIGNING_KEY = os.getenv("ALCHEMY_WEBHOOK_SIGNING_KEY", "")
+ALCHEMY_AUTH_TOKEN = os.getenv("ALCHEMY_AUTH_TOKEN", "")  # Notify API token, dashboard > Settings > Auth Token
+# Alchemy webhooks are per-network, so each chain needs its own webhook ID
+ALCHEMY_WEBHOOK_IDS = {
+    "ethereum": os.getenv("ALCHEMY_WEBHOOK_ID_ETHEREUM", ""),
+    "base": os.getenv("ALCHEMY_WEBHOOK_ID_BASE", ""),
+    "robinhood": os.getenv("ALCHEMY_WEBHOOK_ID_ROBINHOOD", ""),
+}
+
 GOPLUS_API_KEY = os.getenv("GOPLUS_API_KEY", "")
 GOPLUS_API_SECRET = os.getenv("GOPLUS_API_SECRET", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
