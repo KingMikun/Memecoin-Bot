@@ -48,7 +48,8 @@ class Trade(Base):
     token_address = Column(String, nullable=False)
     token_symbol = Column(String, default="")
     action = Column(String)  # "buy" or "sell"
-    amount_usd = Column(Float, default=0.0)
+    token_amount = Column(Float, default=0.0)  # raw quantity transacted
+    amount_usd = Column(Float, default=0.0)    # token_amount * price at ingest time; 0 if price unavailable
     entry_mcap = Column(Float, nullable=True)
     tx_hash = Column(String, default="")
     timestamp = Column(DateTime, default=datetime.utcnow)
