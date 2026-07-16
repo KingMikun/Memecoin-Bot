@@ -19,6 +19,7 @@ from scoring.confluence import score_token
 from scoring.security import check_token
 from alerts.notifier import send_alert, send_trade_notification
 from database import Alert as AlertLog
+from utils.price import fetch_token_market_data
 
 router = APIRouter()
 
@@ -59,7 +60,9 @@ async def _handle_activity(chain: str, item: dict):
         # fromAddress == tracked wallet -> they sent the token out -> sell
         # toAddress == tracked wallet -> they received it -> buy
         action = "sell" if item.get("fromAddress", "").lower() == wallet_address.lower() else "buy"
-        amount_usd = float(item.get("value") or 0)
+        token_amount = float(item.get("value") or 0)
+        price, market_cap = await fetch_token_market_data(chain, token_address)
+        amount_usd = token_amount * price if price is not None else 0.0
 
         trade = Trade(
             wallet_id=wallet.id,
@@ -67,7 +70,9 @@ async def _handle_activity(chain: str, item: dict):
             token_address=token_address,
             token_symbol=item.get("asset", ""),
             action=action,
+            token_amount=token_amount,
             amount_usd=amount_usd,
+            entry_mcap=market_cap,
             tx_hash=item.get("hash", ""),
         )
         session.add(trade)
@@ -77,7 +82,8 @@ async def _handle_activity(chain: str, item: dict):
         session.close()
 
     await send_trade_notification(
-        wallet_label, wallet_addr, chain, action, token_address, item.get("asset", ""), amount_usd,
+        wallet_label, wallet_addr, chain, action, token_address, item.get("asset", ""),
+        token_amount, amount_usd, market_cap,
     )
 
     if action != "buy":
