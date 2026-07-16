@@ -50,3 +50,8 @@ CHAINS = {
     # Until then it falls back to manual contract checks (see scoring/security.py).
     "solana": {"label": "Solana", "goplus_id": None, "kind": "solana"},
 }
+
+# A single EVM wallet address is valid on every EVM chain by construction —
+# there's no such thing as "this address only exists on Base." So tracking
+# a wallet on any one EVM chain tracks it on all of them automatically.
+EVM_CHAINS = [c for c, cfg in CHAINS.items() if cfg["kind"] == "evm"]
