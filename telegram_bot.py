@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler
 from config import TELEGRAM_BOT_TOKEN
 from bot.handlers import (
     start, help_cmd, add_wallet, list_wallets, label_wallet, untrack_wallet, stats,
-    import_wallets,
+    import_wallets, wallet_history,
 )
 
 
@@ -21,5 +21,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("label", label_wallet))
     app.add_handler(CommandHandler("untrack", untrack_wallet))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("wallethistory", wallet_history))
 
     return app
