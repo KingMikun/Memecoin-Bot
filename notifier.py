@@ -19,11 +19,13 @@ _bot = Bot(token=TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
 
 def format_trade_notification(
     wallet_label: str, wallet_address: str, chain: str,
-    action: str, token_address: str, token_symbol: str, amount_usd: float,
+    action: str, token_address: str, token_symbol: str,
+    token_amount: float, amount_usd: float, market_cap: float | None = None,
 ) -> str:
     emoji = "🟢" if action == "buy" else "🔴"
     wallet_link = wallet_explorer_url(chain, wallet_address)
     wallet_display = f"[{wallet_label or wallet_address[:6]}]({wallet_link})" if wallet_link else (wallet_label or wallet_address)
+    mcap_line = f"\n*Market cap:* ${market_cap:,.0f}" if market_cap else ""
 
     return (
         f"{emoji} *{action.upper()}* — tracked wallet\n\n"
@@ -31,17 +33,20 @@ def format_trade_notification(
         f"*Chain:* {chain.title()}\n"
         f"*Token:* `{token_symbol or 'unknown'}`\n"
         f"*Contract:* `{token_address}`\n"
-        f"*Size:* ${amount_usd:,.2f}\n"
+        f"*Amount:* {token_amount:,.4g}\n"
+        f"*Size:* ${amount_usd:,.2f}{mcap_line}\n"
         f"*Links:* {helpful_links(chain, token_address)}"
     )
 
 
 async def send_trade_notification(
     wallet_label: str, wallet_address: str, chain: str,
-    action: str, token_address: str, token_symbol: str, amount_usd: float,
+    action: str, token_address: str, token_symbol: str,
+    token_amount: float, amount_usd: float, market_cap: float | None = None,
 ):
     text = format_trade_notification(
-        wallet_label, wallet_address, chain, action, token_address, token_symbol, amount_usd,
+        wallet_label, wallet_address, chain, action, token_address, token_symbol,
+        token_amount, amount_usd, market_cap,
     )
     if _bot is None or not TELEGRAM_ALERT_CHAT_ID:
         print("[notifier] Telegram not configured — printing instead:")
