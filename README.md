@@ -127,6 +127,40 @@ is per-token: pull the "Top Traders" list on Birdeye/DexScreener for tokens
 you already have conviction on — see `seed_evm_from_birdeye_top_traders()` in
 `ingest/discovery.py` for a stub to wire up once you have a Birdeye key.
 
+## Upgrading an already-deployed bot — read this before redeploying
+
+`init_db()` uses SQLAlchemy's `create_all()`, which only creates tables that
+don't exist yet — it does **not** add new columns to a table that's already
+live in your Railway Postgres. Recent updates added `token_amount` and
+`entry_mcap` to the `trades` table. If your bot was already running before
+those were added, every trade insert/query will now throw a silent
+"column does not exist" error — which, before this update, showed the user
+nothing at all (fixed now with a global error handler, but you still need
+to fix the schema).
+
+Run this once against your Railway Postgres (Railway dashboard → Postgres
+plugin → Connect → run via `psql` or the Query tab) before redeploying:
+
+```sql
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS token_amount FLOAT DEFAULT 0;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_mcap FLOAT;
+```
+
+If you're still on the SQLite default (no Postgres plugin added yet), skip
+this — SQLite gets rebuilt fresh on each deploy in most Railway setups, so
+there's no stale schema to migrate.
+
+## Not finding a command? Check this first
+
+If a command you just added (like `/wallethistory`) gets no response at
+all — not even an error — the two most likely causes, in order:
+1. **The latest `bot/telegram_bot.py` and `bot/handlers.py` haven't been
+   redeployed yet** — Telegram silently ignores commands with no registered
+   handler. Check `/help` on your live bot; if it's missing, redeploy.
+2. **The schema migration above hasn't been run** — every Trade-related
+   command errors out. You'll now get a "⚠️ Something went wrong" reply
+   instead of silence, and the real error will be in Railway's logs.
+
 ## Not financial advice
 The bot flags patterns, not guarantees. GoPlus and every honeypot detector will
 occasionally miss something new — treat every alert as a lead to verify, not an
