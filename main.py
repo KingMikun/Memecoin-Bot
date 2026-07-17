@@ -3,21 +3,34 @@ Single process, two jobs — matches how King Analytics core already runs on
 Railway: one service, one Procfile, one deploy.
 
 - FastAPI serves the Helius + Alchemy webhook endpoints
-- python-telegram-bot polls Telegram for commands in the same event loop
+- Telegram updates arrive via webhook (production) or polling (local dev)
 
-Run locally:   uvicorn main:app --reload
-Deploy:        Railway auto-detects via Procfile (web: uvicorn main:app --host 0.0.0.0 --port $PORT)
+Why webhook instead of polling in production: Telegram only allows ONE
+process to hold a getUpdates long-poll connection per bot token. Any overlap
+during a deploy (old container not fully stopped, a second replica, a local
+test run left running) throws telegram.error.Conflict and crash-loops the
+whole app — which is exactly what silently ate commands before this change.
+A webhook has no such contention: Telegram just POSTs to a URL, and
+whichever container is up handles it. Falls back to polling automatically
+when PUBLIC_BASE_URL isn't set (e.g. running locally with `uvicorn --reload`),
+since a webhook needs a real public URL to register.
+
+Run locally:   uvicorn main:app --reload            (uses polling)
+Deploy:        Railway auto-detects via Procfile     (uses webhook)
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from telegram import Update
 
+from config import PUBLIC_BASE_URL
 from database import init_db
 from bot.telegram_bot import build_application
 from ingest.helius_webhook import router as helius_router
 from ingest.evm_webhook import router as evm_router
 
 telegram_app = None
+TELEGRAM_WEBHOOK_PATH = "/webhook/telegram"
 
 
 @asynccontextmanager
@@ -28,12 +41,21 @@ async def lifespan(app: FastAPI):
     telegram_app = build_application()
     await telegram_app.initialize()
     await telegram_app.start()
-    await telegram_app.updater.start_polling()
-    print("[main] Telegram bot polling started, DB ready, webhooks live.")
+
+    if PUBLIC_BASE_URL:
+        webhook_url = f"{PUBLIC_BASE_URL.rstrip('/')}{TELEGRAM_WEBHOOK_PATH}"
+        await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
+        print(f"[main] Telegram webhook set to {webhook_url} — DB ready, chain webhooks live.")
+    else:
+        await telegram_app.updater.start_polling()
+        print("[main] PUBLIC_BASE_URL not set — falling back to polling (local dev). DB ready, chain webhooks live.")
 
     yield
 
-    await telegram_app.updater.stop()
+    if PUBLIC_BASE_URL:
+        await telegram_app.bot.delete_webhook()
+    else:
+        await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
 
@@ -41,6 +63,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="King Analytics Wallet Intelligence Bot", lifespan=lifespan)
 app.include_router(helius_router)
 app.include_router(evm_router)
+
+
+@app.post(TELEGRAM_WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
 
 
 @app.get("/")
