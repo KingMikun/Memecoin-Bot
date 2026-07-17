@@ -1,4 +1,4 @@
-"""
+#"""
 The commands you actually type. Kept tight on purpose:
   /start            intro
   /addwallet        track + label a wallet
