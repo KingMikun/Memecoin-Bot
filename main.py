@@ -66,12 +66,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if PUBLIC_BASE_URL:
-        try:
-            await telegram_app.bot.delete_webhook()
-        except Exception:
-            logger.exception("[main] Failed to delete Telegram webhook on shutdown (non-fatal)")
-    else:
+    # Deliberately NOT calling delete_webhook() here. Telegram webhooks persist
+    # fine across restarts — there's no need to tear one down on shutdown, and
+    # doing so is actively harmful with Railway's rolling deploys: an old
+    # container can still be winding down in the background after a new one
+    # has already started and re-registered the webhook, and that old
+    # container's shutdown would wipe out what the new one just set. Letting
+    # the next startup's set_webhook() call (idempotent) be the only thing
+    # that touches it avoids that race entirely.
+    if not PUBLIC_BASE_URL:
         await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
