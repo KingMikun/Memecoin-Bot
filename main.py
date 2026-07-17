@@ -19,6 +19,7 @@ Run locally:   uvicorn main:app --reload            (uses polling)
 Deploy:        Railway auto-detects via Procfile     (uses webhook)
 """
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -28,6 +29,8 @@ from database import init_db
 from bot.telegram_bot import build_application
 from ingest.helius_webhook import router as helius_router
 from ingest.evm_webhook import router as evm_router
+
+logger = logging.getLogger(__name__)
 
 telegram_app = None
 TELEGRAM_WEBHOOK_PATH = "/webhook/telegram"
@@ -44,8 +47,19 @@ async def lifespan(app: FastAPI):
 
     if PUBLIC_BASE_URL:
         webhook_url = f"{PUBLIC_BASE_URL.rstrip('/')}{TELEGRAM_WEBHOOK_PATH}"
-        await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
-        print(f"[main] Telegram webhook set to {webhook_url} — DB ready, chain webhooks live.")
+        try:
+            ok = await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
+            info = await telegram_app.bot.get_webhook_info()
+            if ok:
+                print(f"[main] Telegram webhook set to {webhook_url} — confirmed url={info.url}")
+            else:
+                logger.error(f"[main] set_webhook returned False for {webhook_url} — Telegram rejected it silently")
+        except Exception:
+            # A failed webhook registration must NOT take down the chain-trade
+            # webhooks or the whole app with it — log it loudly and keep going.
+            # Telegram commands will be dead until this is fixed, but Helius/
+            # Alchemy ingestion and confluence alerts stay alive.
+            logger.exception(f"[main] Failed to set Telegram webhook to {webhook_url} — Telegram commands are DOWN until this is fixed. Chain webhooks remain live.")
     else:
         await telegram_app.updater.start_polling()
         print("[main] PUBLIC_BASE_URL not set — falling back to polling (local dev). DB ready, chain webhooks live.")
@@ -53,7 +67,10 @@ async def lifespan(app: FastAPI):
     yield
 
     if PUBLIC_BASE_URL:
-        await telegram_app.bot.delete_webhook()
+        try:
+            await telegram_app.bot.delete_webhook()
+        except Exception:
+            logger.exception("[main] Failed to delete Telegram webhook on shutdown (non-fatal)")
     else:
         await telegram_app.updater.stop()
     await telegram_app.stop()
@@ -67,6 +84,9 @@ app.include_router(evm_router)
 
 @app.post(TELEGRAM_WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
+    if telegram_app is None:
+        logger.error("[main] Telegram webhook hit before app finished starting up")
+        return {"ok": False}
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
@@ -75,4 +95,11 @@ async def telegram_webhook(request: Request):
 
 @app.get("/")
 async def health():
-    return {"status": "king analytics wallet bot — online"}
+    webhook_status = "n/a (polling mode)"
+    if telegram_app is not None and PUBLIC_BASE_URL:
+        try:
+            info = await telegram_app.bot.get_webhook_info()
+            webhook_status = {"url": info.url, "pending_update_count": info.pending_update_count, "last_error": info.last_error_message}
+        except Exception as e:
+            webhook_status = f"error checking webhook: {e}"
+    return {"status": "king analytics wallet bot — online", "telegram_webhook": webhook_status}
