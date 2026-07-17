@@ -63,7 +63,31 @@ Talk to your bot on Telegram, run `/addwallet <address> <chain> <label>`.
 2. Add a Postgres plugin — Railway injects `DATABASE_URL` automatically, the bot
    upgrades from SQLite to Postgres with zero code changes
 3. Set the env vars from `.env.example` in Railway's dashboard
-4. Set `PUBLIC_BASE_URL` to the Railway-assigned domain
+4. Set `PUBLIC_BASE_URL` to the Railway-assigned domain — this now also
+   controls how Telegram updates are delivered (see below), not just the
+   chain webhooks.
+
+### Telegram: webhook mode, not polling — and why that matters
+
+The bot uses a Telegram **webhook** in production (Telegram POSTs updates to
+`{PUBLIC_BASE_URL}/webhook/telegram`), falling back to polling only when
+`PUBLIC_BASE_URL` is unset — i.e. local dev with `uvicorn main:app --reload`.
+
+This isn't a style choice — polling on a platform like Railway is fragile:
+Telegram only allows **one** process to hold a `getUpdates` long-poll
+connection per bot token at a time. Any overlap — a previous deploy's
+container not fully stopped, an accidental second replica, a local test run
+left running against the same token — throws
+`telegram.error.Conflict: terminated by other getUpdates request`, which
+crash-loops the whole app. That crash loop is what silently eats commands:
+the bot is only actually up in the gaps between restarts. Webhook mode has
+no such contention — Telegram just POSTs to a URL, and whichever container
+is up handles it. No conflict is possible, no crash loop, no dropped commands.
+
+**If you ever see that Conflict error in Railway logs:** it means something
+is still polling with the same token. Check Railway's replica count (should
+be 1), confirm no stale deployment is still alive, and confirm nobody's
+running the bot locally against the same `TELEGRAM_BOT_TOKEN`.
 5. Deploy — Railway reads the `Procfile` automatically
 
 ### Wiring up webhooks — now automatic
