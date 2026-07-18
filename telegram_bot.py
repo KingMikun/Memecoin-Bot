@@ -35,15 +35,25 @@ def build_application() -> Application:
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("addwallet", add_wallet))
-    app.add_handler(CommandHandler("importwallets", import_wallets))
-    app.add_handler(CommandHandler("wallets", list_wallets))
-    app.add_handler(CommandHandler("label", label_wallet))
-    app.add_handler(CommandHandler("untrack", untrack_wallet))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("wallethistory", wallet_history))
+    commands = {
+        "start": start,
+        "help": help_cmd,
+        "addwallet": add_wallet,
+        "importwallets": import_wallets,
+        "wallets": list_wallets,
+        "label": label_wallet,
+        "untrack": untrack_wallet,
+        "stats": stats,
+        "wallethistory": wallet_history,
+    }
+    for name, handler_fn in commands.items():
+        app.add_handler(CommandHandler(name, handler_fn))
     app.add_error_handler(error_handler)
+
+    # Prints unconditionally at every startup, independent of any test command —
+    # the fastest possible check for "is this deploy actually current": if a
+    # command you expect isn't in this list, the deployed bot/handlers.py or
+    # bot/telegram_bot.py is stale, full stop, no further diagnosis needed.
+    print(f"[telegram_bot] Registered commands: {', '.join('/' + c for c in commands)}")
 
     return app
