@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
             ok = await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
             info = await telegram_app.bot.get_webhook_info()
             if ok:
-                print(f"[main] Telegram webhook set to {webhook_url} — confirmed url={info.url}")
+                logger.info(f"[main] Telegram webhook set to {webhook_url} — confirmed url={info.url}")
             else:
                 logger.error(f"[main] set_webhook returned False for {webhook_url} — Telegram rejected it silently")
         except Exception:
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
             logger.exception(f"[main] Failed to set Telegram webhook to {webhook_url} — Telegram commands are DOWN until this is fixed. Chain webhooks remain live.")
     else:
         await telegram_app.updater.start_polling()
-        print("[main] PUBLIC_BASE_URL not set — falling back to polling (local dev). DB ready, chain webhooks live.")
+        logger.info("[main] PUBLIC_BASE_URL not set — falling back to polling (local dev). DB ready, chain webhooks live.")
 
     yield
 
