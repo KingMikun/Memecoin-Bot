@@ -30,6 +30,11 @@ from bot.telegram_bot import build_application
 from ingest.helius_webhook import router as helius_router
 from ingest.evm_webhook import router as evm_router
 
+# Without this, logger.info() calls are silently dropped — Python's default
+# logging level only surfaces WARNING and above, which is why "[main]" print()
+# statements were visible in Railway logs but any logger.info() call never was.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+
 logger = logging.getLogger(__name__)
 
 telegram_app = None
@@ -88,11 +93,19 @@ app.include_router(evm_router)
 @app.post(TELEGRAM_WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     if telegram_app is None:
-        logger.error("[main] Telegram webhook hit before app finished starting up")
+        logger.error("[telegram_webhook] Hit before app finished starting up")
         return {"ok": False}
     data = await request.json()
+    # Log receipt unconditionally, before any handler logic runs — this is
+    # the one log line that proves Telegram actually delivered the update,
+    # independent of whether a command handler works, crashes, or is missing.
+    update_id = data.get("update_id")
+    text = data.get("message", {}).get("text", "")
+    logger.info(f"[telegram_webhook] Received update_id={update_id} text={text!r}")
+
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
+    logger.info(f"[telegram_webhook] Finished processing update_id={update_id}")
     return {"ok": True}
 
 
