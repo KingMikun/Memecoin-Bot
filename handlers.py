@@ -366,29 +366,51 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    address = args[0]
-    explicit_chain = args[1].lower() if len(args) > 1 else None
-
-    chains, normalized = _resolve_target_chains(address, explicit_chain)
-    logger.info(f"[wallet_history] resolved chains={chains} normalized={normalized}")
-    if chains is None:
-        await update.message.reply_text(f"Unknown chain '{explicit_chain}'. Pick from: {VALID_CHAINS}")
-        return
-
-    session = get_session()
     try:
-        wallet_rows = session.execute(
-            select(Wallet).where(Wallet.address == normalized, Wallet.chain.in_(chains))
-        ).scalars().all()
-        logger.info(f"[wallet_history] found {len(wallet_rows)} wallet row(s)")
-        if not wallet_rows:
-            await update.message.reply_text("Wallet not found.")
-            return
-        stats = get_wallet_stats(session, wallet_rows)
-        reply = format_wallet_history(stats)
-        logger.info(f"[wallet_history] built reply, {len(reply)} chars")
-    finally:
-        session.close()
+        address = args[0]
+        explicit_chain = args[1].lower() if len(args) > 1 else None
 
-    await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
-    logger.info("[wallet_history] reply sent successfully")
+        chains, normalized = _resolve_target_chains(address, explicit_chain)
+        logger.info(f"[wallet_history] resolved chains={chains} normalized={normalized}")
+        if chains is None:
+            await update.message.reply_text(f"Unknown chain '{explicit_chain}'. Pick from: {VALID_CHAINS}")
+            return
+
+        session = get_session()
+        try:
+            wallet_rows = session.execute(
+                select(Wallet).where(Wallet.address == normalized, Wallet.chain.in_(chains))
+            ).scalars().all()
+            logger.info(f"[wallet_history] found {len(wallet_rows)} wallet row(s)")
+            if not wallet_rows:
+                await update.message.reply_text("Wallet not found.")
+                return
+            stats = get_wallet_stats(session, wallet_rows)
+            reply = format_wallet_history(stats)
+            logger.info(f"[wallet_history] built reply, {len(reply)} chars")
+        finally:
+            session.close()
+
+        try:
+            await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
+            logger.info("[wallet_history] reply sent successfully (Markdown)")
+        except Exception as markdown_error:
+            # A bad Markdown entity (stray _ or * in a token symbol, say) would
+            # otherwise fail silently from the user's side — fall back to
+            # plain text rather than losing the reply entirely.
+            logger.warning(f"[wallet_history] Markdown send failed ({markdown_error}), retrying as plain text")
+            plain = reply.replace("*", "").replace("`", "")
+            await update.message.reply_text(plain)
+            logger.info("[wallet_history] reply sent successfully (plain text fallback)")
+
+    except Exception as e:
+        # Last-resort net: whatever broke, the user sees the actual error
+        # directly in Telegram instead of silence — no Railway log access
+        # required to know something failed and roughly why.
+        logger.exception(f"[wallet_history] Unhandled error for args={args}")
+        await update.message.reply_text(
+            f"⚠️ /wallethistory failed: {type(e).__name__}: {e}\n\n"
+            "This is the raw error so it's visible without checking logs. "
+            "If this looks like a DB or missing-column error, restart the "
+            "app once — schema auto-migration runs on every startup."
+        )
