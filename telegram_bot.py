@@ -54,6 +54,6 @@ def build_application() -> Application:
     # the fastest possible check for "is this deploy actually current": if a
     # command you expect isn't in this list, the deployed bot/handlers.py or
     # bot/telegram_bot.py is stale, full stop, no further diagnosis needed.
-    print(f"[telegram_bot] Registered commands: {', '.join('/' + c for c in commands)}")
+    logger.info(f"[telegram_bot] Registered commands: {', '.join('/' + c for c in commands)}")
 
     return app
