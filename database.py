@@ -3,11 +3,14 @@ Schema is intentionally small. Four tables, each earns its place.
 """
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
+    create_engine, Column, Integer, String, Float, DateTime, Boolean, ForeignKey, inspect, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+import logging
 
 from config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 engine = create_engine(
     DATABASE_URL,
@@ -79,8 +82,52 @@ class Subscriber(Base):
     joined_at = Column(DateTime, default=datetime.utcnow)
 
 
+_SQL_TYPE_MAP = {
+    Integer: "INTEGER",
+    String: "VARCHAR",
+    Float: "FLOAT",
+    DateTime: "TIMESTAMP",
+    Boolean: "BOOLEAN",
+}
+
+
+def _column_sql_type(column: Column) -> str:
+    for py_type, sql_type in _SQL_TYPE_MAP.items():
+        if isinstance(column.type, py_type):
+            return sql_type
+    return "VARCHAR"  # safe fallback, shouldn't hit this with our current models
+
+
+def _auto_migrate():
+    """
+    create_all() only creates brand-new tables — it silently does nothing to
+    a table that already exists but is missing columns a newer model added
+    (exactly what happened when token_amount/entry_mcap were added to Trade
+    after the table already existed in production). This diffs the live DB
+    against the model on every startup and adds whatever's missing, so a
+    forgotten manual migration can't break trade ingestion or /wallethistory
+    ever again.
+    """
+    inspector = inspect(engine)
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in inspector.get_table_names():
+            continue  # brand new table, create_all() already handled it
+        existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name in existing_cols:
+                continue
+            sql_type = _column_sql_type(column)
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column.name} {sql_type}"))
+                logger.info(f"[auto_migrate] Added missing column {table_name}.{column.name} ({sql_type})")
+            except Exception:
+                logger.exception(f"[auto_migrate] Failed to add {table_name}.{column.name} — check DB permissions")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _auto_migrate()
 
 
 def get_session():
