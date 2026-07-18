@@ -1,4 +1,4 @@
-#"""
+"""
 The commands you actually type. Kept tight on purpose:
   /start            intro
   /addwallet        track + label a wallet
@@ -9,6 +9,8 @@ The commands you actually type. Kept tight on purpose:
   /wallethistory    trade history, realized PnL, win rate for one wallet
   /help             command list
 """
+import logging
+
 from sqlalchemy import select
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -17,6 +19,8 @@ from database import Wallet, Subscriber, get_session
 from config import CHAINS, EVM_CHAINS
 from utils.webhook_sync import sync_wallet
 from scoring.wallet_stats import get_wallet_stats, format_wallet_history
+
+logger = logging.getLogger(__name__)
 
 VALID_CHAINS = ", ".join(CHAINS.keys())
 
@@ -353,6 +357,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
+    logger.info(f"[wallet_history] called with args={args}")
     if not args:
         await update.message.reply_text(
             "Usage: /wallethistory <address> [chain]\n"
@@ -365,6 +370,7 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     explicit_chain = args[1].lower() if len(args) > 1 else None
 
     chains, normalized = _resolve_target_chains(address, explicit_chain)
+    logger.info(f"[wallet_history] resolved chains={chains} normalized={normalized}")
     if chains is None:
         await update.message.reply_text(f"Unknown chain '{explicit_chain}'. Pick from: {VALID_CHAINS}")
         return
@@ -374,12 +380,15 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wallet_rows = session.execute(
             select(Wallet).where(Wallet.address == normalized, Wallet.chain.in_(chains))
         ).scalars().all()
+        logger.info(f"[wallet_history] found {len(wallet_rows)} wallet row(s)")
         if not wallet_rows:
             await update.message.reply_text("Wallet not found.")
             return
         stats = get_wallet_stats(session, wallet_rows)
         reply = format_wallet_history(stats)
+        logger.info(f"[wallet_history] built reply, {len(reply)} chars")
     finally:
         session.close()
 
     await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
+    logger.info("[wallet_history] reply sent successfully")
