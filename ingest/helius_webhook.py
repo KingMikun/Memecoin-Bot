@@ -16,8 +16,9 @@ from sqlalchemy import select
 from database import Wallet, Trade, get_session
 from scoring.confluence import score_token
 from scoring.security import check_token
-from alerts.notifier import send_alert
+from alerts.notifier import send_alert, send_trade_notification
 from database import Alert as AlertLog
+from utils.price import fetch_token_market_data
 
 router = APIRouter()
 
@@ -39,7 +40,10 @@ async def _handle_event(event: dict):
     if swap is None:
         return
 
-    wallet_address, token_address, token_symbol, action, amount_usd, tx_hash = swap
+    wallet_address, token_address, token_symbol, action, token_amount, tx_hash = swap
+
+    price, market_cap = await fetch_token_market_data("solana", token_address)
+    amount_usd = token_amount * price if price is not None else 0.0
 
     session = get_session()
     try:
@@ -55,13 +59,23 @@ async def _handle_event(event: dict):
             token_address=token_address,
             token_symbol=token_symbol,
             action=action,
+            token_amount=token_amount,
             amount_usd=amount_usd,
+            entry_mcap=market_cap,
             tx_hash=tx_hash,
         )
         session.add(trade)
         session.commit()
+        wallet_label, wallet_addr = wallet.label, wallet.address
     finally:
         session.close()
+
+    # Every trade from a tracked wallet gets a notification — buy or sell,
+    # regardless of whether it later clears the confluence bar.
+    await send_trade_notification(
+        wallet_label, wallet_addr, "solana", action, token_address, token_symbol,
+        token_amount, amount_usd, market_cap,
+    )
 
     if action != "buy":
         return
@@ -106,16 +120,16 @@ def _extract_swap(event: dict):
         token_address = token_outputs[0].get("mint")
         token_symbol = token_outputs[0].get("symbol", "")
         action = "buy"
-        amount_usd = float(token_outputs[0].get("tokenAmount", 0))
+        token_amount = float(token_outputs[0].get("tokenAmount", 0))
     elif token_inputs:
         token_address = token_inputs[0].get("mint")
         token_symbol = token_inputs[0].get("symbol", "")
         action = "sell"
-        amount_usd = float(token_inputs[0].get("tokenAmount", 0))
+        token_amount = float(token_inputs[0].get("tokenAmount", 0))
     else:
         return None
 
     if not fee_payer or not token_address:
         return None
 
-    return fee_payer, token_address, token_symbol, action, amount_usd, event.get("signature", "")
+    return fee_payer, token_address, token_symbol, action, token_amount, event.get("signature", "")
