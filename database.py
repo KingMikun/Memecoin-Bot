@@ -12,6 +12,26 @@ from config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
+def _normalize_database_url(url: str) -> str:
+    """
+    Railway injects DATABASE_URL as postgresql:// (sometimes the older
+    postgres:// form). SQLAlchemy defaults bare postgresql:// to the psycopg2
+    dialect, which depends on the system's libpq shared library — not
+    reliably present on Railway's slim Python runtime, causing
+    'libpq.so.5: cannot open shared object file' at import time even when
+    psycopg2-binary installed fine at build time. Forcing the pg8000 dialect
+    (pure Python, no native library at all) sidesteps that failure mode
+    entirely.
+    """
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://") and "+pg8000" not in url:
+        url = url.replace("postgresql://", "postgresql+pg8000://", 1)
+    return url
+
+
+DATABASE_URL = _normalize_database_url(DATABASE_URL)
+
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
