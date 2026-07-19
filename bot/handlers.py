@@ -19,6 +19,7 @@ from database import Wallet, Subscriber, get_session
 from config import CHAINS, EVM_CHAINS
 from utils.webhook_sync import sync_wallet
 from scoring.wallet_stats import get_wallet_stats, format_wallet_history
+from utils.onchain_lookup import fetch_solana_preview, fetch_evm_preview, format_preview
 
 logger = logging.getLogger(__name__)
 
@@ -382,9 +383,22 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 select(Wallet).where(Wallet.address == normalized, Wallet.chain.in_(chains))
             ).scalars().all()
             logger.info(f"[wallet_history] found {len(wallet_rows)} wallet row(s)")
+
             if not wallet_rows:
-                await update.message.reply_text("Wallet not found.")
+                # Not tracked yet — fall back to a live on-chain lookup so you
+                # can evaluate a wallet before committing to /addwallet, rather
+                # than hitting a dead end.
+                preview_chain = chains[0]  # any EVM chain works for lookup purposes; Solana has only one
+                if preview_chain == "solana":
+                    trades = await fetch_solana_preview(normalized)
+                else:
+                    trades = await fetch_evm_preview(normalized, preview_chain)
+                logger.info(f"[wallet_history] not tracked, live preview on {preview_chain}: "
+                            f"{'unavailable' if trades is None else f'{len(trades)} trade(s)'}")
+                reply = format_preview(trades, preview_chain, normalized)
+                await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
                 return
+
             stats = get_wallet_stats(session, wallet_rows)
             reply = format_wallet_history(stats)
             logger.info(f"[wallet_history] built reply, {len(reply)} chars")
