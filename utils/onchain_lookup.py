@@ -151,11 +151,21 @@ async def fetch_evm_preview_all_chains(address: str, chains: list[str], limit: i
     if all(r is None for r in results):
         return None
 
+    per_chain = [r for r in results if r]  # drop chains that failed/returned None, keep chains with (possibly empty) results
+
+    # Interleave round-robin across chains rather than concatenate-then-slice.
+    # A concatenate would let a high-volume chain (Ethereum, almost always)
+    # fill the entire display before a lower-volume chain like Base or
+    # Robinhood ever gets a slot — exactly the bug this replaces.
     combined: list[PreviewTrade] = []
-    for r in results:
-        if r:
-            combined.extend(r)
-    logger.info(f"[onchain_lookup] Combined EVM preview for {address} across {chains}: {len(combined)} total trade(s)")
+    max_len = max((len(r) for r in per_chain), default=0)
+    for i in range(max_len):
+        for chain_trades in per_chain:
+            if i < len(chain_trades):
+                combined.append(chain_trades[i])
+
+    logger.info(f"[onchain_lookup] Combined EVM preview for {address} across {chains}: "
+                f"{len(combined)} total trade(s), per-chain counts: {[len(r) for r in results if r is not None]}")
     return combined[:limit]
 
 
