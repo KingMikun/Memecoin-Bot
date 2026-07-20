@@ -1,12 +1,12 @@
 import logging
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import TELEGRAM_BOT_TOKEN
 from bot.handlers import (
     start, help_cmd, add_wallet, list_wallets, label_wallet, untrack_wallet, stats,
-    import_wallets, wallet_history,
+    import_wallets, wallet_history, preview_page_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def build_application() -> Application:
     }
     for name, handler_fn in commands.items():
         app.add_handler(CommandHandler(name, handler_fn))
+    app.add_handler(CallbackQueryHandler(preview_page_callback, pattern="^pvpage:"))
     app.add_error_handler(error_handler)
 
     # Prints unconditionally at every startup, independent of any test command —
