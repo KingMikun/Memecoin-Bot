@@ -12,15 +12,19 @@ Solana reuses the exact same SWAP-parsing logic as the live webhook
 trade are parsed identically — one source of truth, not two.
 """
 import logging
+import uuid
 
 import httpx
 
 from config import HELIUS_API_KEY, ALCHEMY_API_KEY
 from ingest.helius_webhook import _extract_swap
+from utils.price import fetch_token_market_data
 
 logger = logging.getLogger(__name__)
 
 HELIUS_HISTORY_URL = "https://api.helius.xyz/v0/addresses/{address}/transactions"
+DEFAULT_PREVIEW_LIMIT = 50
+PAGE_SIZE = 10
 
 # Alchemy network subdomains for the JSON-RPC endpoint. Robinhood Chain isn't
 # listed because, as of writing, Alchemy hasn't published a confirmed
@@ -40,9 +44,10 @@ class PreviewTrade:
         self.token_amount = token_amount
         self.tx_hash = tx_hash
         self.chain = chain
+        self.current_market_cap: float | None = None  # filled in by _enrich_with_current_mcap
 
 
-async def fetch_solana_preview(address: str, limit: int = 10) -> list[PreviewTrade] | None:
+async def fetch_solana_preview(address: str, limit: int = DEFAULT_PREVIEW_LIMIT) -> list[PreviewTrade] | None:
     """Returns recent swaps for a Solana address, or None if the lookup itself failed
     (missing API key, network error) — distinct from an empty list, which means the
     lookup succeeded but the wallet genuinely has no recent swap activity."""
@@ -78,7 +83,7 @@ async def fetch_solana_preview(address: str, limit: int = 10) -> list[PreviewTra
     return trades
 
 
-async def fetch_evm_preview(address: str, chain: str, limit: int = 10) -> list[PreviewTrade] | None:
+async def fetch_evm_preview(address: str, chain: str, limit: int = DEFAULT_PREVIEW_LIMIT) -> list[PreviewTrade] | None:
     """Returns recent ERC-20 transfers in/out of an EVM address, interpreted as
     buy/sell. Returns None if unavailable (missing key, unsupported chain, network error)."""
     subdomain = _ALCHEMY_NETWORK_SUBDOMAIN.get(chain)
@@ -133,7 +138,7 @@ async def fetch_evm_preview(address: str, chain: str, limit: int = 10) -> list[P
     return trades[:limit]
 
 
-async def fetch_evm_preview_all_chains(address: str, chains: list[str], limit: int = 10) -> list[PreviewTrade] | None:
+async def fetch_evm_preview_all_chains(address: str, chains: list[str], limit: int = DEFAULT_PREVIEW_LIMIT) -> list[PreviewTrade] | None:
     """
     An EVM address is valid on every EVM chain — checking only one (as the
     original version of this function did, always defaulting to Ethereum)
@@ -169,26 +174,98 @@ async def fetch_evm_preview_all_chains(address: str, chains: list[str], limit: i
     return combined[:limit]
 
 
-def format_preview(trades: list[PreviewTrade] | None, chain_label: str, address: str) -> str:
-    if trades is None:
-        return (
-            f"No preview available right now — this needs "
-            f"{'HELIUS_API_KEY' if chain_label == 'solana' else 'ALCHEMY_API_KEY'} configured, "
-            f"or this chain isn't supported for live lookups yet.\n\n"
-            f"Track it with /addwallet to start collecting trades from here on, "
-            f"which does work regardless."
-        )
+async def _enrich_with_current_mcap(trades: list[PreviewTrade]) -> None:
+    """
+    Fills in current_market_cap for each trade — one lookup per unique
+    (chain, token) pair, not per trade, to avoid redundant API calls when
+    a wallet traded the same token multiple times.
+
+    Deliberately does NOT attempt to estimate a historical mcap at the time
+    of each past trade — we don't have a historical price feed wired up, and
+    faking one off today's price would produce numbers that look precise but
+    are actually wrong. This is "what's it worth now," not "what was it
+    worth then." Real entry/exit mcap is only available for tracked wallets,
+    where price is captured at the actual moment of each trade.
+    """
+    unique_tokens = {(t.chain, t.token_address) for t in trades if t.chain != "robinhood"}
+    mcap_cache: dict[tuple[str, str], float | None] = {}
+    for chain, token_address in unique_tokens:
+        _, mcap = await fetch_token_market_data(chain, token_address)
+        mcap_cache[(chain, token_address)] = mcap
+
+    for t in trades:
+        t.current_market_cap = mcap_cache.get((t.chain, t.token_address))
+
+
+# In-memory session store so Next/Previous buttons can page through an
+# already-fetched result set without re-hitting Helius/Alchemy on every
+# click. Keyed by a short id (fits easily in Telegram's 64-byte callback_data
+# limit) rather than the address itself. Resets on redeploy — fine, since
+# this is just pagination state for an in-progress preview, not durable data.
+_preview_sessions: dict[str, list[PreviewTrade]] = {}
+
+
+def _store_preview_session(trades: list[PreviewTrade]) -> str:
+    session_id = uuid.uuid4().hex[:10]
+    _preview_sessions[session_id] = trades
+    if len(_preview_sessions) > 500:  # simple unbounded-growth guard
+        _preview_sessions.pop(next(iter(_preview_sessions)), None)
+    return session_id
+
+
+def get_preview_session(session_id: str) -> list[PreviewTrade] | None:
+    return _preview_sessions.get(session_id)
+
+
+def _format_trade_line(t: PreviewTrade, show_chain_tag: bool) -> str:
+    emoji = "🟢" if t.action == "buy" else "🔴"
+    chain_tag = f" [{t.chain.title()}]" if show_chain_tag else ""
+    mcap = f" — mcap ${t.current_market_cap:,.0f}" if t.current_market_cap else ""
+    return f"{emoji} {t.action.upper()} `{t.token_symbol or t.token_address[:8]}`{chain_tag} — {t.token_amount:,.4g}{mcap}"
+
+
+def format_preview_page(trades: list[PreviewTrade], page: int, chain_label: str) -> tuple[str, int]:
+    """Returns (message_text, total_pages) for one page of an already-fetched trade list."""
     if not trades:
-        return f"No recent swap activity found for this wallet on {chain_label}."
+        return f"No recent swap activity found for this wallet on {chain_label}.", 1
 
-    lines = [f"*Live preview* (not tracked) — {chain_label}\n"]
-    for t in trades[:10]:
-        emoji = "🟢" if t.action == "buy" else "🔴"
-        chain_tag = f" [{t.chain.title()}]" if chain_label == "EVM (Ethereum/Base/Robinhood)" else ""
-        lines.append(f"{emoji} {t.action.upper()} `{t.token_symbol or t.token_address[:8]}`{chain_tag} — {t.token_amount:,.4g}")
+    total_pages = max(1, (len(trades) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start, end = page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE
+    page_trades = trades[start:end]
 
+    show_chain_tag = chain_label == "EVM (Ethereum/Base/Robinhood)"
+    lines = [f"*Live preview* (not tracked) — {chain_label}", f"Page {page + 1}/{total_pages} — {len(trades)} trade(s) total\n"]
+    lines += [_format_trade_line(t, show_chain_tag) for t in page_trades]
     lines.append(
-        "\n_This is raw on-chain activity, not FIFO-matched PnL — win rate/PnL "
+        "\n_Raw on-chain activity with current market cap shown for context — not the "
+        "price at the time of each trade, and not FIFO-matched PnL. Real win rate/PnL "
         "need trades collected over time. /addwallet this address to start tracking it properly._"
     )
-    return "\n".join(lines)
+    return "\n".join(lines), total_pages
+
+
+def format_preview_unavailable(chain_label: str) -> str:
+    return (
+        f"No preview available right now — this needs "
+        f"{'HELIUS_API_KEY' if chain_label == 'solana' else 'ALCHEMY_API_KEY'} configured, "
+        f"or this chain isn't supported for live lookups yet.\n\n"
+        f"Track it with /addwallet to start collecting trades from here on, "
+        f"which does work regardless."
+    )
+
+
+def build_pagination_keyboard(session_id: str, page: int, total_pages: int):
+    """Builds the Previous/Next inline keyboard. Returns None if there's only
+    one page — no point showing dead buttons."""
+    if total_pages <= 1:
+        return None
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("◀ Previous", callback_data=f"pvpage:{session_id}:{page - 1}"))
+    if page < total_pages - 1:
+        buttons.append(InlineKeyboardButton("Next ▶", callback_data=f"pvpage:{session_id}:{page + 1}"))
+    return InlineKeyboardMarkup([buttons])
