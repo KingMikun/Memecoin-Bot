@@ -19,7 +19,11 @@ from database import Wallet, Subscriber, get_session
 from config import CHAINS, EVM_CHAINS
 from utils.webhook_sync import sync_wallet
 from scoring.wallet_stats import get_wallet_stats, format_wallet_history
-from utils.onchain_lookup import fetch_solana_preview, fetch_evm_preview, fetch_evm_preview_all_chains, format_preview
+from utils.onchain_lookup import (
+    fetch_solana_preview, fetch_evm_preview, fetch_evm_preview_all_chains,
+    format_preview_unavailable, format_preview_page, build_pagination_keyboard,
+    _enrich_with_current_mcap, _store_preview_session, get_preview_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -403,8 +407,18 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chain_label = "EVM (Ethereum/Base/Robinhood)"
                 logger.info(f"[wallet_history] not tracked, live preview on {chain_label}: "
                             f"{'unavailable' if trades is None else f'{len(trades)} trade(s)'}")
-                reply = format_preview(trades, chain_label, normalized)
-                await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
+
+                if trades is None:
+                    await update.message.reply_text(format_preview_unavailable(chain_label))
+                    return
+
+                await _enrich_with_current_mcap(trades)
+                session_id = _store_preview_session(trades)
+                page_text, total_pages = format_preview_page(trades, 0, chain_label)
+                keyboard = build_pagination_keyboard(session_id, 0, total_pages)
+                await update.message.reply_text(
+                    page_text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=keyboard,
+                )
                 return
 
             stats = get_wallet_stats(session, wallet_rows)
@@ -436,3 +450,39 @@ async def wallet_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "If this looks like a DB or missing-column error, restart the "
             "app once — schema auto-migration runs on every startup."
         )
+
+
+async def preview_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the Previous/Next inline button presses on a live preview page."""
+    query = update.callback_query
+    await query.answer()  # stops Telegram's loading spinner on the button
+
+    try:
+        _, session_id, page_str = query.data.split(":")
+        page = int(page_str)
+    except (ValueError, AttributeError):
+        logger.warning(f"[preview_page_callback] malformed callback_data: {query.data!r}")
+        return
+
+    trades = get_preview_session(session_id)
+    if trades is None:
+        await query.edit_message_text(
+            "This preview session expired (bot may have restarted). Run /wallethistory again."
+        )
+        return
+
+    # Re-derive the chain label from the trades themselves rather than passing
+    # it through callback_data — keeps callback_data short and this handler
+    # self-contained.
+    chains_present = {t.chain for t in trades}
+    if chains_present == {"solana"}:
+        chain_label = "solana"
+    elif len(chains_present) > 1:
+        chain_label = "EVM (Ethereum/Base/Robinhood)"
+    else:
+        chain_label = next(iter(chains_present))
+
+    page_text, total_pages = format_preview_page(trades, page, chain_label)
+    keyboard = build_pagination_keyboard(session_id, page, total_pages)
+    await query.edit_message_text(page_text, parse_mode="Markdown", reply_markup=keyboard)
+    logger.info(f"[preview_page_callback] session={session_id} showed page {page + 1}/{total_pages}")
