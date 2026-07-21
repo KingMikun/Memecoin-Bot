@@ -26,7 +26,9 @@ router = APIRouter()
 _NETWORK_TO_CHAIN = {
     "ETH_MAINNET": "ethereum",
     "BASE_MAINNET": "base",
-    "ROBINHOOD_MAINNET": "robinhood",  # placeholder slug — confirm exact value in Alchemy docs
+    "ROBINHOOD_MAINNET": "robinhood",  # follows Alchemy's ETH_MAINNET/BASE_MAINNET convention;
+                                        # confirmed the RPC subdomain is "robinhood-mainnet", so this
+                                        # is very likely right, but verify against a real webhook payload once one arrives
 }
 
 
