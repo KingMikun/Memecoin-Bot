@@ -26,13 +26,14 @@ HELIUS_HISTORY_URL = "https://api.helius.xyz/v0/addresses/{address}/transactions
 DEFAULT_PREVIEW_LIMIT = 50
 PAGE_SIZE = 10
 
-# Alchemy network subdomains for the JSON-RPC endpoint. Robinhood Chain isn't
-# listed because, as of writing, Alchemy hasn't published a confirmed
-# subdomain for it — preview falls back to "not available yet" on that chain
-# rather than guessing a URL and silently returning nothing.
+# Alchemy network subdomains for the JSON-RPC endpoint. Robinhood Chain
+# mainnet is confirmed live on Alchemy (chain ID 4663) with Transfers API
+# support, so it's wired in the same way as Ethereum/Base — no more silent
+# "unsupported" fallback for this chain.
 _ALCHEMY_NETWORK_SUBDOMAIN = {
     "ethereum": "eth-mainnet",
     "base": "base-mainnet",
+    "robinhood": "robinhood-mainnet",
 }
 
 
